@@ -66,6 +66,8 @@ typedef enum
      * this state to get the complete UID.
      *
      * The PICC enters the ACTIVE State when it is selected with its complete UID.
+     * 
+     * Not used though
      */
     RC522_PICC_STATE_READY,
 
@@ -99,6 +101,8 @@ typedef enum
      * Cascade levels are handled inside this state to get complete UID.
      *
      * The PICC enters the ACTIVE* State when it is selected with its complete UID.
+     * 
+     * Not used though
      */
     RC522_PICC_STATE_READY_H,
 
@@ -145,6 +149,7 @@ typedef struct
     uint8_t sak;
     rc522_picc_type_t type;
     rc522_picc_state_t state;
+    uint32_t last_seen;
 } rc522_picc_t;
 
 typedef struct
