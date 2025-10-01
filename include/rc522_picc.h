@@ -66,7 +66,7 @@ typedef enum
      * this state to get the complete UID.
      *
      * The PICC enters the ACTIVE State when it is selected with its complete UID.
-     * 
+     *
      * Not used though
      */
     RC522_PICC_STATE_READY,
@@ -101,7 +101,7 @@ typedef enum
      * Cascade levels are handled inside this state to get complete UID.
      *
      * The PICC enters the ACTIVE* State when it is selected with its complete UID.
-     * 
+     *
      * Not used though
      */
     RC522_PICC_STATE_READY_H,

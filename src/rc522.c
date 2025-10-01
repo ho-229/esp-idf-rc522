@@ -283,13 +283,14 @@ void rc522_task(void *arg)
                         scan_known_remaining = 0;
                         continue;
                     }
-                } else {
+                }
+                else {
                     ret = rc522_picc_reqa(rc522, &atqa);
                     if (ret != ESP_OK) {
                         break;
                     }
                 }
-                
+
                 uint8_t sak;
                 ret = rc522_picc_select(rc522, &uid, &sak, uid.length);
                 if (ret != ESP_OK) {
@@ -320,7 +321,8 @@ void rc522_task(void *arg)
                     rc522_picc_set_state(rc522, &rc522->picc[known_index], RC522_PICC_STATE_ACTIVE_H, true);
                     rc522_picc_halta(rc522, &rc522->picc[known_index]);
                     rc522_picc_set_state(rc522, &rc522->picc[known_index], RC522_PICC_STATE_HALT, true);
-                } else {
+                }
+                else {
                     memcpy(&new_picc[new_picc_count].uid, &uid, sizeof(rc522_picc_uid_t));
                     new_picc[new_picc_count].sak = sak;
                     new_picc[new_picc_count].atqa = atqa;
@@ -335,8 +337,7 @@ void rc522_task(void *arg)
 
             // merge new_picc into rc522->picc array, the picc will be ignored if there is no space
             for (int i = 0; i < RC522_PICC_SLOT_COUNT; i++) {
-                if (rc522->picc[i].state != RC522_PICC_STATE_IDLE
-                    && !known_present[i]
+                if (rc522->picc[i].state != RC522_PICC_STATE_IDLE && !known_present[i]
                     && rc522->picc[i].last_seen + picc_heartbeat_failure_threshold_ms < rc522_millis()) {
                     rc522_picc_set_state(rc522, &rc522->picc[i], RC522_PICC_STATE_IDLE, true);
                 }
