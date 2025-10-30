@@ -122,7 +122,9 @@ esp_err_t rc522_create(const rc522_config_t *config, rc522_handle_t *out_rc522)
     rc522_handle_t rc522 = calloc(1, sizeof(struct rc522));
     ESP_RETURN_ON_FALSE(rc522 != NULL, ESP_ERR_NO_MEM, TAG, "nomem");
 
-    rc522_picc_set_state(rc522, &rc522->picc, RC522_PICC_STATE_IDLE, false);
+    for (int i = 0; i < RC522_PICC_SLOT_COUNT; i++) {
+        rc522->picc[i].state = RC522_PICC_STATE_IDLE;
+    }
 
     esp_err_t ret = ESP_OK;
 
@@ -211,7 +213,6 @@ void rc522_task(void *arg)
     uint32_t last_poll_ms = 0;
     const uint32_t task_delay_ms = 50;
     const uint32_t picc_heartbeat_failure_threshold_ms = (2 * task_delay_ms);
-    uint32_t picc_heartbeat_failure_at_ms = 0;
     bool mutex_taken = false;
     const uint16_t mutex_take_timeout_ms = 4000;
 
@@ -246,86 +247,105 @@ void rc522_task(void *arg)
         }
 
         bool should_poll = (rc522_millis() - last_poll_ms) > rc522->config->poll_interval_ms;
-
-        if (rc522->picc.state == RC522_PICC_STATE_IDLE || rc522->picc.state == RC522_PICC_STATE_HALT) {
+        if (should_poll) {
             rc522_picc_atqa_desc_t atqa;
-
-            if (rc522->picc.state == RC522_PICC_STATE_IDLE && ((ret = rc522_picc_reqa(rc522, &atqa)) != ESP_OK)) {
-                continue;
+            bool known_present[RC522_PICC_SLOT_COUNT] = { false };
+            uint8_t scan_known_remaining = 0;
+            for (int i = 0; i < RC522_PICC_SLOT_COUNT; i++) {
+                if (rc522->picc[i].state != RC522_PICC_STATE_IDLE) {
+                    scan_known_remaining++;
+                }
             }
 
-            if (rc522->picc.state == RC522_PICC_STATE_HALT && ((ret = rc522_picc_wupa(rc522, &atqa)) != ESP_OK)) {
-                continue;
+            rc522_picc_t new_picc[RC522_PICC_SLOT_COUNT];
+            uint8_t new_picc_count = 0;
+            for (int i = 0; i < RC522_PICC_SLOT_COUNT; i++) {
+                new_picc[i].state = RC522_PICC_STATE_IDLE;
             }
 
-            // card is present
-            rc522->picc.atqa = atqa;
+            for (;;) {
+                if (new_picc_count >= RC522_PICC_SLOT_COUNT) {
+                    break;
+                }
 
-            if (rc522->picc.state == RC522_PICC_STATE_IDLE) {
-                rc522_picc_set_state(rc522, &rc522->picc, RC522_PICC_STATE_READY, true);
-            }
-            else if (rc522->picc.state == RC522_PICC_STATE_HALT) {
-                rc522_picc_set_state(rc522, &rc522->picc, RC522_PICC_STATE_READY_H, true);
-            }
-        }
-
-        if (should_poll
-            && (rc522->picc.state == RC522_PICC_STATE_READY || rc522->picc.state == RC522_PICC_STATE_READY_H)) {
-            rc522_picc_uid_t uid;
-            uint8_t sak;
-
-            ret = rc522_picc_select(rc522, &uid, &sak, false);
-            last_poll_ms = rc522_millis();
-
-            if (ret != ESP_OK) {
-                if (ret != RC522_ERR_RX_TIMEOUT && ret != RC522_ERR_INVALID_ATQA && ret != RC522_ERR_INVALID_SAK) {
-                    RC522_LOGW("select failed (err=%04" RC522_X ")", ret);
+                rc522_picc_uid_t uid = { .length = 0 };
+                if (scan_known_remaining) {
+                    // find the next known picc uid to select
+                    for (int i = scan_known_remaining - 1; i >= 0; i--) {
+                        if (rc522->picc[i].state != RC522_PICC_STATE_IDLE) {
+                            memcpy(&uid, &rc522->picc[i].uid, sizeof(rc522_picc_uid_t));
+                            break;
+                        }
+                    }
+                    scan_known_remaining--;
+                    ret = rc522_picc_wupa(rc522, &atqa);
+                    if (ret != ESP_OK) {
+                        scan_known_remaining = 0;
+                        continue;
+                    }
                 }
                 else {
-                    RC522_LOGD("select failed (err=%04" RC522_X ")", ret);
+                    ret = rc522_picc_reqa(rc522, &atqa);
+                    if (ret != ESP_OK) {
+                        break;
+                    }
                 }
 
-                rc522_picc_set_state(rc522, &rc522->picc, RC522_PICC_STATE_IDLE, true);
-                continue;
+                uint8_t sak;
+                ret = rc522_picc_select(rc522, &uid, &sak, uid.length);
+                if (ret != ESP_OK) {
+                    continue;
+                }
+
+                int8_t known_index = -1;
+                for (int i = 0; i < RC522_PICC_SLOT_COUNT; i++) {
+                    if (rc522->picc[i].state != RC522_PICC_STATE_IDLE) {
+                        if (rc522->picc[i].uid.length == uid.length
+                            && memcmp(rc522->picc[i].uid.value, uid.value, uid.length) == 0) {
+                            known_index = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (known_index >= 0) {
+                    if (known_present[known_index]) {
+                        // already processed
+                        rc522_picc_halta(rc522, &rc522->picc[known_index]);
+                        continue;
+                    }
+                    known_present[known_index] = true;
+                    rc522->picc[known_index].sak = sak;
+                    rc522->picc[known_index].atqa = atqa;
+                    rc522->picc[known_index].last_seen = rc522_millis();
+                    rc522_picc_set_state(rc522, &rc522->picc[known_index], RC522_PICC_STATE_ACTIVE_H, true);
+                    rc522_picc_halta(rc522, &rc522->picc[known_index]);
+                    rc522_picc_set_state(rc522, &rc522->picc[known_index], RC522_PICC_STATE_HALT, true);
+                }
+                else {
+                    memcpy(&new_picc[new_picc_count].uid, &uid, sizeof(rc522_picc_uid_t));
+                    new_picc[new_picc_count].sak = sak;
+                    new_picc[new_picc_count].atqa = atqa;
+                    new_picc[new_picc_count].type = rc522_picc_get_type(&new_picc[new_picc_count]);
+                    new_picc[new_picc_count].last_seen = rc522_millis();
+                    rc522_picc_set_state(rc522, &new_picc[new_picc_count], RC522_PICC_STATE_ACTIVE, true);
+                    rc522_picc_halta(rc522, &new_picc[new_picc_count]);
+                    rc522_picc_set_state(rc522, &new_picc[new_picc_count], RC522_PICC_STATE_HALT, true);
+                    new_picc_count++;
+                }
             }
 
-            memcpy(&rc522->picc.uid, &uid, sizeof(rc522_picc_uid_t));
-            rc522->picc.sak = sak;
-            rc522->picc.type = rc522_picc_get_type(&rc522->picc);
-
-            if (rc522->picc.state == RC522_PICC_STATE_READY) {
-                rc522_picc_set_state(rc522, &rc522->picc, RC522_PICC_STATE_ACTIVE, true);
+            // merge new_picc into rc522->picc array, the picc will be ignored if there is no space
+            for (int i = 0; i < RC522_PICC_SLOT_COUNT; i++) {
+                if (rc522->picc[i].state != RC522_PICC_STATE_IDLE && !known_present[i]
+                    && rc522->picc[i].last_seen + picc_heartbeat_failure_threshold_ms < rc522_millis()) {
+                    rc522_picc_set_state(rc522, &rc522->picc[i], RC522_PICC_STATE_IDLE, true);
+                }
+                if (rc522->picc[i].state == RC522_PICC_STATE_IDLE && new_picc_count) {
+                    memcpy(&rc522->picc[i], &new_picc[new_picc_count - 1], sizeof(rc522_picc_t));
+                    new_picc_count--;
+                }
             }
-            else if (rc522->picc.state == RC522_PICC_STATE_READY_H) {
-                rc522_picc_set_state(rc522, &rc522->picc, RC522_PICC_STATE_ACTIVE_H, true);
-            }
-
-            picc_heartbeat_failure_at_ms = 0;
-
-            continue;
-        }
-
-        if (rc522->picc.state == RC522_PICC_STATE_ACTIVE || rc522->picc.state == RC522_PICC_STATE_ACTIVE_H) {
-            if (picc_heartbeat_failure_at_ms != 0
-                && ((rc522_millis() - picc_heartbeat_failure_at_ms) > picc_heartbeat_failure_threshold_ms)) {
-                picc_heartbeat_failure_at_ms = 0;
-                rc522_picc_set_state(rc522, &rc522->picc, RC522_PICC_STATE_IDLE, true);
-                continue;
-            }
-
-            if ((ret = rc522_picc_heartbeat(rc522, &rc522->picc, NULL, NULL)) == ESP_OK) {
-                picc_heartbeat_failure_at_ms = 0;
-            }
-            else if (picc_heartbeat_failure_at_ms == 0) {
-                picc_heartbeat_failure_at_ms = rc522_millis();
-            }
-
-            if (ret != ESP_OK) {
-                RC522_LOGD("heartbeat failed (err=%04" RC522_X ")", ret);
-            }
-
-            // card is still in the field
-            continue;
         }
     }
 

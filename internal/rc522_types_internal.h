@@ -5,6 +5,7 @@
 #include <esp_bit_defs.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
+#include "sdkconfig.h"
 #include "rc522_types.h"
 #include "rc522_picc.h"
 
@@ -13,6 +14,8 @@ extern "C" {
 #endif
 
 #define RC522_LOG_TAG "rc522"
+
+#define RC522_PICC_SLOT_COUNT CONFIG_RC522_PICC_SLOT_COUNT
 
 #define RC522_POLL_INTERVAL_MS_DEFAULT (120)
 #define RC522_POLL_INTERVAL_MS_MIN     (50)
@@ -38,7 +41,7 @@ struct rc522
     TaskHandle_t task_handle;             /*<! Handle of task */
     esp_event_loop_handle_t event_handle; /*<! Handle of event loop */
     rc522_state_t state;                  /*<! Current state */
-    rc522_picc_t picc;
+    rc522_picc_t picc[RC522_PICC_SLOT_COUNT];
     EventGroupHandle_t bits;
 };
 

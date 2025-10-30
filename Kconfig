@@ -11,4 +11,12 @@ menu "RC522"
             writing incorrect access bits, which could render the sector
             unusable.
 
+    config RC522_PICC_SLOT_COUNT
+        int "Number of available tag slots for RC522 devices"
+        default 2
+        range 1 8
+        help
+            This option sets the number of available tag slots for RC522 devices.
+            Each slot can hold one tag. The default value is 2.
+
 endmenu
