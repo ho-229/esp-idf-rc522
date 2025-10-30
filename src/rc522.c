@@ -257,7 +257,7 @@ void rc522_task(void *arg)
                 }
             }
 
-            rc522_picc_t new_picc[RC522_PICC_SLOT_COUNT];
+            rc522_picc_t new_picc[RC522_PICC_SLOT_COUNT] = { 0 };
             uint8_t new_picc_count = 0;
             for (int i = 0; i < RC522_PICC_SLOT_COUNT; i++) {
                 new_picc[i].state = RC522_PICC_STATE_IDLE;
@@ -309,8 +309,9 @@ void rc522_task(void *arg)
                 }
 
                 if (known_index >= 0) {
+                    // process known picc
                     if (known_present[known_index]) {
-                        // already processed
+                        RC522_LOGD("Already processed known picc: %d", known_index);
                         rc522_picc_halta(rc522, &rc522->picc[known_index]);
                         continue;
                     }
@@ -323,6 +324,20 @@ void rc522_task(void *arg)
                     rc522_picc_set_state(rc522, &rc522->picc[known_index], RC522_PICC_STATE_HALT, true);
                 }
                 else {
+                    // process new picc
+                    int8_t new_index = -1;
+                    for (int i = 0; i < sizeof(new_picc) / sizeof(new_picc[0]); i++) {
+                        if (new_picc[i].uid.length == uid.length
+                            && memcmp(new_picc[i].uid.value, uid.value, uid.length) == 0) {
+                            new_index = i;
+                            break;
+                        }
+                    }
+                    if (new_index >= 0) {
+                        RC522_LOGD("Already scanned new picc: %d", new_index);
+                        rc522_picc_halta(rc522, &new_picc[new_index]);
+                        continue;
+                    }
                     memcpy(&new_picc[new_picc_count].uid, &uid, sizeof(rc522_picc_uid_t));
                     new_picc[new_picc_count].sak = sak;
                     new_picc[new_picc_count].atqa = atqa;
