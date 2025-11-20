@@ -203,7 +203,7 @@ esp_err_t rc522_picc_transceive(const rc522_handle_t rc522, const rc522_picc_tra
     RC522_RETURN_ON_ERROR_SILENTLY(rc522_picc_send(rc522, &transaction_clone, &context));
 
     if (out_result) {
-        RC522_RETURN_ON_ERROR(rc522_picc_receive(rc522, &context, out_result));
+        RC522_RETURN_ON_ERROR_SILENTLY(rc522_picc_receive(rc522, &context, out_result));
     }
 
     return ESP_OK;
@@ -295,7 +295,6 @@ esp_err_t rc522_picc_select(const rc522_handle_t rc522, rc522_picc_uid_t *out_ui
     uint8_t cascade_level = 1;
     esp_err_t ret;
     uint8_t count;
-    uint8_t check_bit;
     uint8_t index;
     uint8_t uid_index;               // The first index in uid->uidByte[] that is used in the current Cascade Level.
     int8_t current_level_known_bits; // The number of known UID bits in the current Cascade Level.
@@ -464,7 +463,18 @@ esp_err_t rc522_picc_select(const rc522_handle_t rc522, rc522_picc_uid_t *out_ui
                 .bytes = { .ptr = response_buffer, .length = response_length },
             };
 
+            // When receiving, the FIFO writes to response_buffer.
+            // If we are sending a partial byte (tx_last_bits > 0), response_buffer points to that same byte.
+            // The receive operation will overwrite it. We need to preserve the bits we sent.
+            uint8_t byte_to_preserve = 0;
+            if (tx_last_bits > 0) {
+                byte_to_preserve = *response_buffer;
+            }
             ret = rc522_picc_transceive(rc522, &transaction, &transaction_result);
+            if (tx_last_bits > 0) {
+                // Restore the bits we sent. rc522_picc_receive masks these bits to 0.
+                *response_buffer |= (byte_to_preserve & ((1 << tx_last_bits) - 1));
+            }
 
             if (ret == ESP_OK) {
                 response_length = transaction_result.bytes.length;
@@ -477,7 +487,6 @@ esp_err_t rc522_picc_select(const rc522_handle_t rc522, rc522_picc_uid_t *out_ui
                 if (skip_anticoll) {
                     // If we are skipping anticoll, we should not have collisions
                     RC522_LOGD("unexpected collision detected");
-
                     return ret;
                 }
 
@@ -505,10 +514,9 @@ esp_err_t rc522_picc_select(const rc522_handle_t rc522, rc522_picc_uid_t *out_ui
                 }
                 // Choose the PICC with the bit set.
                 current_level_known_bits = collision_pos;
-                count = current_level_known_bits % 8; // The bit to modify
-                check_bit = (current_level_known_bits - 1) % 8;
-                index = 1 + (current_level_known_bits / 8) + (count ? 1 : 0); // First byte is index 0.
-                buffer[index] |= (1 << check_bit);
+                count = (current_level_known_bits - 1) % 8;     // The bit to modify
+                index = 2 + (current_level_known_bits - 1) / 8; // First byte is index 0.
+                buffer[index] |= (1 << count);
             }
             else if (ret != ESP_OK) {
                 RC522_LOGD("transceive failed");
